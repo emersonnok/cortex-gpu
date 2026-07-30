@@ -1,0 +1,47 @@
+# Vai em: .github/workflows/build-imagem-gpu.yml
+# Constrói a imagem NA NUVEM (grátis) e publica no registro do GitHub.
+# Sua internet não sobe nada: o GitHub monta e o RunPod baixa direto de lá.
+name: build imagem GPU
+
+on:
+  workflow_dispatch:        # botão "Run workflow" na aba Actions
+  push:
+    paths:
+      - "Dockerfile"
+      - "recepcao_gpu.py"
+      - "baixar_modelos.py"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: liberar espaco em disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: gravar token do HuggingFace como segredo de build
+        run: printf '%s' "${{ secrets.HF_TOKEN }}" > hf_token.txt
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/cortex-gpu:latest
+          secret-files: hf_token=hf_token.txt
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
