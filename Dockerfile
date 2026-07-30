@@ -13,9 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.10 /usr/bin/python
 
-# 1) Bibliotecas (camada pesada, fica em cache entre builds)
-RUN pip install --no-cache-dir torch==2.1.2 torchaudio==2.1.2 \
+# 1) Torch da CUDA 12.1 (mesma da imagem base).
+#    A versão 2.5.1 já satisfaz o "torch>=2.5.1" do whisperx, então o pip
+#    NÃO troca por uma versão CUDA 13 no passo seguinte.
+RUN pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 \
       --index-url https://download.pytorch.org/whl/cu121
+
+# 2) WhisperX e o servidor
 RUN pip install --no-cache-dir \
       whisperx==3.4.2 \
       fastapi==0.115.6 \
@@ -23,13 +27,19 @@ RUN pip install --no-cache-dir \
       requests==2.32.3 \
       huggingface_hub==0.27.1
 
-# 2) Modelos embutidos (token do HF entra como SEGREDO de build: não fica na imagem)
+# 3) Trava de segurança: se o torch não for o da CUDA 12.1, o build FALHA aqui
+#    (melhor descobrir agora, de graça, do que na GPU paga).
+RUN python -c "import torch, sys; \
+print('torch instalado:', torch.__version__); \
+sys.exit(0 if 'cu121' in torch.__version__ else 1)"
+
+# 4) Modelos embutidos (token do HF entra como SEGREDO de build: não fica na imagem)
 COPY baixar_modelos.py /tmp/baixar_modelos.py
 RUN --mount=type=secret,id=hf_token \
     HF_TOKEN="$(cat /run/secrets/hf_token)" python /tmp/baixar_modelos.py \
     && rm /tmp/baixar_modelos.py
 
-# 3) Recepção HTTP
+# 5) Recepção HTTP
 COPY recepcao_gpu.py /app/recepcao_gpu.py
 WORKDIR /app
 EXPOSE 8000
