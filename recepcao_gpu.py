@@ -15,6 +15,9 @@ Se ficar MINUTOS_INATIVIDADE sem trabalho, a máquina se autodestrói.
 import os
 import time
 import uuid
+import glob
+import shutil
+import subprocess
 import threading
 import tempfile
 import requests
@@ -102,12 +105,59 @@ def carregar_modelos():
 
 
 # ---------------------------------------------------------------- processamento
-def baixar_audio(url, destino):
-    with requests.get(url, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with open(destino, "wb") as f:
-            for pedaco in r.iter_content(1024 * 512):
-                f.write(pedaco)
+def eh_youtube(url):
+    u = (url or "").lower()
+    return "youtube.com" in u or "youtu.be" in u
+
+
+def _yt_dlp(url, saida_modelo, cookies=None, log=None):
+    """Roda o yt-dlp; devolve (ok, mensagem)."""
+    cmd = ["python", "-m", "yt_dlp", "-x", "--audio-format", "mp3",
+           "--no-playlist", "--no-progress", "-o", saida_modelo]
+    if cookies:
+        cmd += ["--cookies", cookies]
+    cmd.append(url)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    saida = (p.stdout or "") + (p.stderr or "")
+    if log and saida.strip():
+        for linha in saida.strip().splitlines()[-4:]:
+            log("    yt-dlp: " + linha[:200])
+    return p.returncode == 0, saida[-500:]
+
+
+def baixar_audio(url, destino, cookies=None, log=None):
+    """
+    Podcast: baixa o arquivo direto.
+    YouTube: usa o yt-dlp com o cookie que o painel mandou.
+
+    O YouTube muda com frequência e quebra o yt-dlp. Por isso, se falhar,
+    tentamos ATUALIZAR o yt-dlp e repetir uma vez — assim a imagem não
+    precisa ser reconstruída toda vez que o YouTube mexe em alguma coisa.
+    """
+    if not eh_youtube(url):
+        with requests.get(url, stream=True, timeout=300) as r:
+            r.raise_for_status()
+            with open(destino, "wb") as f:
+                for pedaco in r.iter_content(1024 * 512):
+                    f.write(pedaco)
+        return destino
+
+    pasta = tempfile.mkdtemp(prefix="yt_")
+    modelo = os.path.join(pasta, "audio.%(ext)s")
+    ok, msg = _yt_dlp(url, modelo, cookies, log)
+    if not ok:
+        if log:
+            log("    yt-dlp falhou; atualizando e tentando de novo...")
+        subprocess.run(["pip", "install", "-q", "--upgrade", "yt-dlp"],
+                       capture_output=True, text=True, timeout=600)
+        ok, msg = _yt_dlp(url, modelo, cookies, log)
+    achados = glob.glob(os.path.join(pasta, "audio.*"))
+    if not ok or not achados:
+        shutil.rmtree(pasta, ignore_errors=True)
+        raise RuntimeError("não consegui baixar o áudio do YouTube. "
+                           "Provável cookie vencido ou bloqueio de IP. " + msg[-200:])
+    shutil.move(achados[0], destino)
+    shutil.rmtree(pasta, ignore_errors=True)
     return destino
 
 
@@ -116,12 +166,21 @@ def processar(tid):
 
     t = trabalhos[tid]
     caminho = None
+    cookies_arq = None
     try:
         t["estado"] = "processando"
         t["etapa"] = "baixando audio"
         t["log"].append("baixando audio")
         caminho = os.path.join(tempfile.gettempdir(), f"{tid}.audio")
-        baixar_audio(t["url_audio"], caminho)
+        # O cookie do YouTube chega no pedido e é gravado só aqui dentro,
+        # nesta máquina que será destruída em seguida. Nunca vai para a
+        # imagem (que é pública) nem fica registrado no RunPod.
+        if t.get("cookies"):
+            cookies_arq = os.path.join(tempfile.gettempdir(), f"{tid}.cookies.txt")
+            with open(cookies_arq, "w", encoding="utf-8") as f:
+                f.write(t["cookies"])
+        baixar_audio(t["url_audio"], caminho, cookies_arq,
+                     log=lambda m: t["log"].append(m))
 
         t["etapa"] = "transcrevendo"
         t["log"].append("transcrevendo")
@@ -163,8 +222,9 @@ def processar(tid):
         t["log"].append(f"ERRO: {e}")
         print(f"[recepcao] erro no trabalho {tid}: {e}", flush=True)
     finally:
-        if caminho and os.path.exists(caminho):
-            os.remove(caminho)
+        for lixo in (caminho, cookies_arq):
+            if lixo and os.path.exists(lixo):
+                os.remove(lixo)          # o cookie não sobrevive ao trabalho
         marcar_atividade()
 
 
@@ -173,6 +233,7 @@ class Pedido(BaseModel):
     url_audio: str
     participantes: int | None = None
     nome: str | None = None
+    cookies: str | None = None      # conteúdo do cookies.txt (só YouTube)
 
 
 @app.get("/saude")
@@ -192,7 +253,8 @@ def novo_trabalho(p: Pedido, x_segredo: str = Header(default="")):
     trabalhos[tid] = {
         "id": tid, "estado": "na_fila", "etapa": "aguardando", "log": [],
         "url_audio": p.url_audio, "participantes": p.participantes,
-        "nome": p.nome, "resultado": None, "erro": None, "criado": time.time(),
+        "nome": p.nome, "cookies": p.cookies,
+        "resultado": None, "erro": None, "criado": time.time(),
     }
 
     def fila():
