@@ -25,7 +25,8 @@ RUN pip install --no-cache-dir \
       fastapi==0.115.6 \
       "uvicorn[standard]==0.34.0" \
       requests==2.32.3 \
-      huggingface_hub==0.27.1
+      huggingface_hub==0.27.1 \
+      yt-dlp
 
 # 3) Trava de segurança: se o torch não for o da CUDA 12.1, o build FALHA aqui
 #    (melhor descobrir agora, de graça, do que na GPU paga).
