@@ -9,9 +9,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
     IDIOMA=pt
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3.10 python3-pip ffmpeg git curl ca-certificates \
+      python3.10 python3-pip ffmpeg git curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.10 /usr/bin/python
+
+# Runtime de JavaScript (Deno) — o YouTube embaralha os links de mídia com um
+# desafio em JS ("n challenge"). Sem um runtime, o yt-dlp só enxerga as
+# miniaturas e falha com "Requested format is not available".
+RUN curl -fsSL -o /tmp/deno.zip \
+      https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+    && unzip -o /tmp/deno.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/deno \
+    && rm -f /tmp/deno.zip \
+    && deno --version
 
 # 1) Torch da CUDA 12.1 (mesma da imagem base).
 #    A versão 2.5.1 já satisfaz o "torch>=2.5.1" do whisperx, então o pip
@@ -26,7 +36,7 @@ RUN pip install --no-cache-dir \
       "uvicorn[standard]==0.34.0" \
       requests==2.32.3 \
       huggingface_hub==0.27.1 \
-      yt-dlp
+      yt-dlp yt-dlp-ejs
 
 # 3) Trava de segurança: se o torch não for o da CUDA 12.1, o build FALHA aqui
 #    (melhor descobrir agora, de graça, do que na GPU paga).
