@@ -148,14 +148,22 @@ def baixar_audio(url, destino, cookies=None, log=None):
     if not ok:
         if log:
             log("    yt-dlp falhou; atualizando e tentando de novo...")
-        subprocess.run(["pip", "install", "-q", "--upgrade", "yt-dlp"],
+        subprocess.run(["pip", "install", "-q", "--upgrade", "yt-dlp", "yt-dlp-ejs"],
                        capture_output=True, text=True, timeout=600)
         ok, msg = _yt_dlp(url, modelo, cookies, log)
     achados = glob.glob(os.path.join(pasta, "audio.*"))
     if not ok or not achados:
         shutil.rmtree(pasta, ignore_errors=True)
-        raise RuntimeError("não consegui baixar o áudio do YouTube. "
-                           "Provável cookie vencido ou bloqueio de IP. " + msg[-200:])
+        baixo = msg.lower()
+        if "sign in" in baixo or "bot" in baixo:
+            causa = "cookie vencido ou IP bloqueado pelo YouTube."
+        elif "challenge" in baixo or "format is not available" in baixo:
+            causa = ("o YouTube exigiu o desafio em JavaScript e o runtime "
+                     "(Deno) não resolveu — imagem desatualizada?")
+        else:
+            causa = "veja a mensagem do yt-dlp."
+        raise RuntimeError("não consegui baixar o áudio do YouTube: "
+                           + causa + " " + msg[-200:])
     shutil.move(achados[0], destino)
     shutil.rmtree(pasta, ignore_errors=True)
     return destino
